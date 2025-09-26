@@ -39,6 +39,7 @@ function ocppStateMachine(state: OcppState, event: OcppEvent): OcppState {
       break;
     case 'Preparing':
       if (event.type === 'REMOTE_START') return 'Charging';
+      if (event.type === 'START_CHARGING') return 'Charging';
       if (event.type === 'UNPLUG') return 'Available';
       break;
     case 'Charging':

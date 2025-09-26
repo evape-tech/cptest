@@ -76,6 +76,8 @@ export const useOcppMessageHandler = ({
   // 跟踪當前正在處理的StartTransaction的connectorId
   const pendingStartTransactionConnectorRef = useRef<number | null>(null);
   const stopTransactionUidRef = useRef<string | null>(null);
+  // 維護 transactionId 到 connectorId 的映射關係
+  const transactionToConnectorMapRef = useRef<Map<number, number>>(new Map());
 
   // 處理 CALL 請求訊息
   const handleCall = (data: any[]) => {
@@ -160,6 +162,8 @@ export const useOcppMessageHandler = ({
         if (chargerType === 'DC') {
           // 對於 DC 充電樁，使用記錄的connectorId來更新對應的狀態
           const targetConnectorId = pendingStartTransactionConnectorRef.current || connectorId;
+          // 記錄 transactionId 到 connectorId 的映射關係
+          transactionToConnectorMapRef.current.set(txId, targetConnectorId);
           if (targetConnectorId === 1) {
             setConnector1TransactionId(txId);
             setConnector1Status('Charging');
@@ -170,6 +174,9 @@ export const useOcppMessageHandler = ({
           appendLog(`Received StartTransaction.conf C${targetConnectorId} with transactionId: ${txId}`);
         } else {
           // AC 充電樁使用原有邏輯
+          const targetConnectorId = 1; // AC 充電樁固定為 connector 1
+          // 記錄 transactionId 到 connectorId 的映射關係
+          transactionToConnectorMapRef.current.set(txId, targetConnectorId);
           setTransactionId(txId);
           appendLog(`Received StartTransaction.conf with transactionId: ${txId}`);
           dispatchOcpp({ type: 'START_CHARGING' });
@@ -274,8 +281,16 @@ export const useOcppMessageHandler = ({
 
   // 處理 RemoteStopTransaction 請求
   const handleRemoteStopTransaction = (uid: string, payload: any) => {
-    // 確定目標連接器ID
-    const targetConnectorId = payload.connectorId || connectorId;
+    // RemoteStopTransaction 只包含 transactionId，需要查找對應的 connectorId
+    const requestedTransactionId = payload.transactionId;
+    const targetConnectorId = transactionToConnectorMapRef.current.get(requestedTransactionId);
+    
+    if (!targetConnectorId) {
+      appendLog(`RemoteStopTransaction failed: transactionId ${requestedTransactionId} not found`);
+      const response = [3, uid, { status: 'Rejected' }];
+      socketRef.current && socketRef.current.send(JSON.stringify(response));
+      return;
+    }
     
     // 1. 回應 Accepted
     const response = [3, uid, { status: 'Accepted' }];
@@ -319,11 +334,16 @@ export const useOcppMessageHandler = ({
           currentEnergy = energy;
         }
         
-        if (currentTransactionId) {
+        // 驗證 transactionId 是否匹配
+        if (currentTransactionId !== requestedTransactionId) {
+          appendLog(`RemoteStopTransaction transactionId mismatch: expected ${requestedTransactionId}, got ${currentTransactionId}`);
+        }
+        
+        if (requestedTransactionId) {
           const stopUid = `uid-${Date.now()}`;
           stopTransactionUidRef.current = stopUid;
           const stopPayload = {
-            transactionId: currentTransactionId,
+            transactionId: requestedTransactionId, // 使用請求中的 transactionId
             idTag: serverIdTag, // 使用伺服器端的 idTag
             meterStop: Math.round(currentEnergy),
             timestamp: new Date().toISOString(),
@@ -333,7 +353,7 @@ export const useOcppMessageHandler = ({
           socketRef.current.send(msg);
           appendLog(`Sent StopTransaction C${targetConnectorId}: ${msg}`);
         } else {
-          appendLog(`Sent StopTransaction fail, transactionId: ${currentTransactionId} for C${targetConnectorId}`);
+          appendLog(`Sent StopTransaction fail, transactionId: ${requestedTransactionId} for C${targetConnectorId}`);
         }
       }
     }, 800);
@@ -354,6 +374,8 @@ export const useOcppMessageHandler = ({
           dispatchOcpp({ type: 'STOP_CHARGING' });
           setTransactionId(null);
         }
+        // 清除 transactionId 到 connectorId 的映射關係
+        transactionToConnectorMapRef.current.delete(requestedTransactionId);
       }
     }, 1300);
   };
@@ -474,8 +496,14 @@ export const useOcppMessageHandler = ({
     }
   };
 
+  // 清除 transactionId 映射關係的函數
+  const clearTransactionMapping = (transactionId: number) => {
+    transactionToConnectorMapRef.current.delete(transactionId);
+  };
+
   return {
     handleMessage,
     stopTransactionUidRef,
+    clearTransactionMapping,
   };
 };

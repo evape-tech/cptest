@@ -230,7 +230,7 @@ function App() {
   };
 
   // ===== OCPP 訊息處理 hook =====
-  const { handleMessage } = useOcppMessageHandler({
+  const { handleMessage, clearTransactionMapping } = useOcppMessageHandler({
     socketRef,
     appendLog,
     chargerType,
@@ -324,53 +324,6 @@ function App() {
     }
   };
 
-  const sendChargingProfile = () => {
-    if (socketRef.current && status === 'CONNECTED') {
-      let limit = 0;
-      let unit = '';
-
-      if (watts) {
-        limit = watts;
-        unit = 'W';
-      } else if (amps) {
-        limit = amps;
-        unit = 'A';
-      } else {
-        appendLog('請輸入至少瓦數或安培');
-        return;
-      }
-
-      const payload = {
-        connectorId: chargerType === 'DC' ? connectorId : 1,
-        chargingProfile: {
-          chargingProfileId: profileId,
-          stackLevel: 0,
-          chargingProfilePurpose: 'TxDefaultProfile',
-          chargingProfileKind: 'Absolute',
-          recurrencyKind: 'Daily',
-          validFrom: new Date().toISOString(),
-          chargingSchedule: {
-            duration: 3600,
-            chargingRateUnit: unit,
-            chargingSchedulePeriod: [
-              {
-                startPeriod: 0,
-                limit,
-                numberPhases: 1,
-              },
-            ],
-          },
-        },
-      };
-
-      const ocppMessage = JSON.stringify([2, `uid-${Date.now()}`, 'SetChargingProfile', payload]);
-      socketRef.current.send(ocppMessage);
-      appendLog(`Sent SetChargingProfile: ${ocppMessage}`);
-    } else {
-      appendLog('無法送出，WebSocket 尚未連線');
-    }
-  };
-
   const handlePlugIn = (targetConnectorId: number) => {
     if (socketRef.current && socketRef.current.readyState === 1) {
       ocppService.sendStatusNotification('Preparing', targetConnectorId);
@@ -437,15 +390,24 @@ function App() {
             if (targetConnectorId === 1) {
               setConnector1Status('Available');
               setConnector1Energy(0);
+              if (connector1TransactionId) {
+                clearTransactionMapping(connector1TransactionId);
+              }
               setConnector1TransactionId(null);
             } else if (targetConnectorId === 2) {
               setConnector2Status('Available');
               setConnector2Energy(0);
+              if (connector2TransactionId) {
+                clearTransactionMapping(connector2TransactionId);
+              }
               setConnector2TransactionId(null);
             }
           } else {
             dispatchOcpp({ type: 'STOP_CHARGING' });
             setEnergy(0);
+            if (transactionId) {
+              clearTransactionMapping(transactionId);
+            }
             setTransactionId(null);
           }
           setServerIdTag('');
@@ -458,15 +420,24 @@ function App() {
         if (targetConnectorId === 1) {
           setConnector1Status('Available');
           setConnector1Energy(0);
+          if (connector1TransactionId) {
+            clearTransactionMapping(connector1TransactionId);
+          }
           setConnector1TransactionId(null);
         } else if (targetConnectorId === 2) {
           setConnector2Status('Available');
           setConnector2Energy(0);
+          if (connector2TransactionId) {
+            clearTransactionMapping(connector2TransactionId);
+          }
           setConnector2TransactionId(null);
         }
       } else {
         dispatchOcpp({ type: 'UNPLUG' });
         setEnergy(0);
+        if (transactionId) {
+          clearTransactionMapping(transactionId);
+        }
         setTransactionId(null);
       }
       setServerIdTag('');
