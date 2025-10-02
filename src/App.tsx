@@ -204,7 +204,7 @@ function App() {
       setEnergy(0);
       meterTimerRef.current = setInterval(() => {
         setEnergy(prev => {
-          const next = prev + Math.random() * 2 + 0.5;
+          const next = prev + 1000 * (Math.random() * 2 + 0.5); // 每10秒增加 500-2500 Wh
           if (socketRef.current && socketRef.current.readyState === 1) {
             const meterPayload = {
               connectorId: 1,
