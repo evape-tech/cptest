@@ -1,7 +1,8 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { OcppService } from '../ocppService';
 
 interface UseOcppMessageHandlerProps {
+  authorizeRemoteTxRequests: boolean;
   socketRef: React.MutableRefObject<WebSocket | null>;
   appendLog: (msg: string) => void;
   chargerType: 'AC' | 'DC';
@@ -40,6 +41,7 @@ interface UseOcppMessageHandlerProps {
 }
 
 export const useOcppMessageHandler = ({
+  authorizeRemoteTxRequests,
   socketRef,
   appendLog,
   chargerType,
@@ -73,6 +75,42 @@ export const useOcppMessageHandler = ({
   setConnector2Amps,
   setConnector2ProfileId,
 }: UseOcppMessageHandlerProps) => {
+  const authSequence = useRef(0);
+  const remoteAuthorizations = useRef(new Map<string, {
+    resolve: (result: any) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>());
+  useEffect(() => {
+    const pending = remoteAuthorizations.current;
+    return () => {
+      pending.forEach(item => {
+        clearTimeout(item.timer);
+        item.reject(new Error('遠端啟動授權已取消'));
+      });
+      pending.clear();
+    };
+  }, []);
+
+  const authorizeRemoteTag = (socket: WebSocket, idTag: string) => {
+    const uid = `remote-auth-${Date.now()}-${++authSequence.current}`;
+    return new Promise<any>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        remoteAuthorizations.current.delete(uid);
+        reject(new Error('Authorize 回覆逾時（15 秒），不開始交易'));
+      }, 15000);
+      remoteAuthorizations.current.set(uid, { resolve, reject, timer });
+      try {
+        const message = JSON.stringify([2, uid, 'Authorize', { idTag }]);
+        socket.send(message);
+        appendLog(`Sent remote-start Authorize: ${message}`);
+      } catch (error) {
+        clearTimeout(timer);
+        remoteAuthorizations.current.delete(uid);
+        reject(error);
+      }
+    });
+  };
   // 跟踪當前正在處理的StartTransaction的connectorId
   const pendingStartTransactionConnectorRef = useRef<number | null>(null);
   const stopTransactionUidRef = useRef<string | null>(null);
@@ -107,6 +145,16 @@ export const useOcppMessageHandler = ({
     console.log(`Received: ${event.data}`);
     try {
       const data = JSON.parse(event.data);
+      if (Array.isArray(data) && (data[0] === 3 || data[0] === 4)) {
+        const pending = remoteAuthorizations.current.get(data[1]);
+        if (pending) {
+          clearTimeout(pending.timer);
+          remoteAuthorizations.current.delete(data[1]);
+          if (data[0] === 4) pending.reject(new Error(`Authorize 錯誤：${data[2]}`));
+          else pending.resolve(data[2]);
+          return;
+        }
+      }
       
       // 根據訊息類型分發處理
       if (Array.isArray(data)) {
@@ -224,7 +272,7 @@ export const useOcppMessageHandler = ({
   };
 
   // 處理 RemoteStartTransaction 請求
-  const handleRemoteStartTransaction = (uid: string, payload: any) => {
+  const handleRemoteStartTransaction = async (uid: string, payload: any) => {
     // 驗證 idTag 是否存在
     if (!payload.idTag) {
       const response = [3, uid, { status: 'Rejected' }];
@@ -250,6 +298,21 @@ export const useOcppMessageHandler = ({
     console.log(`Received RemoteStartTransaction, 回應: ${canStart ? 'Accepted' : 'Rejected'}`);
 
     if (canStart) {
+      const requestSocket = socketRef.current;
+      if (!requestSocket) return;
+      if (authorizeRemoteTxRequests) {
+        try {
+          const result = await authorizeRemoteTag(requestSocket, payload.idTag);
+          if (result?.idTagInfo?.status !== 'Accepted') {
+            appendLog(`遠端啟動授權未通過：${result?.idTagInfo?.status || '無效回覆'}，不開始交易`);
+            return;
+          }
+        } catch (error) {
+          appendLog(error instanceof Error ? error.message : String(error));
+          return;
+        }
+      }
+      if (socketRef.current !== requestSocket || requestSocket.readyState !== 1) return;
       // 對於RemoteStartTransaction，優先使用請求中指定的connectorId
       // 如果沒有指定，則使用當前UI選中的connectorId（對於DC充電樁）或預設為1（對於AC充電樁）
       const targetConnectorId = payload.connectorId || (chargerType === 'DC' ? connectorId : 1);
@@ -257,7 +320,7 @@ export const useOcppMessageHandler = ({
       
       // 1. 先送 StartTransaction
       setTimeout(() => {
-        if (socketRef.current && socketRef.current.readyState === 1) {
+        if (socketRef.current === requestSocket && requestSocket.readyState === 1) {
           const startTxPayload = {
             connectorId: targetConnectorId,
             idTag: payload.idTag, // 直接使用 payload.idTag，避免狀態更新延遲

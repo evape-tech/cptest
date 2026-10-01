@@ -1,4 +1,5 @@
 import React from 'react';
+import { AuthorizeRemoteSwitch } from './AuthorizeRemoteSwitch';
 import {
   Card,
   CardHeader,
@@ -15,12 +16,12 @@ import {
 } from '@mui/material';
 
 interface ConnectionSettingsProps {
+  authorizeRemoteTxRequests: boolean;
+  setAuthorizeRemoteTxRequests: (value: boolean) => void;
   chargerType: 'AC' | 'DC';
   setChargerType: (type: 'AC' | 'DC') => void;
-  wsProtocol: 'ws' | 'wss';
-  setWsProtocol: (protocol: 'ws' | 'wss') => void;
-  domain: string;
-  setDomain: (domain: string) => void;
+  serverUrl: string;
+  setServerUrl: (url: string) => void;
   cpPath: string;
   setCpPath: (path: string) => void;
   wsUrl: string;
@@ -31,12 +32,12 @@ interface ConnectionSettingsProps {
 }
 
 export const ConnectionSettings: React.FC<ConnectionSettingsProps> = ({
+  authorizeRemoteTxRequests,
+  setAuthorizeRemoteTxRequests,
   chargerType,
   setChargerType,
-  wsProtocol,
-  setWsProtocol,
-  domain,
-  setDomain,
+  serverUrl,
+  setServerUrl,
   cpPath,
   setCpPath,
   wsUrl,
@@ -54,12 +55,15 @@ export const ConnectionSettings: React.FC<ConnectionSettingsProps> = ({
       />
       <CardContent>
         <Stack spacing={2}>
+          <AuthorizeRemoteSwitch value={authorizeRemoteTxRequests}
+            onChange={setAuthorizeRemoteTxRequests} disabled={status !== 'DISCONNECTED'} />
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
             <FormControl sx={{ minWidth: 120 }}>
               <InputLabel>充電樁類型</InputLabel>
               <Select
                 value={chargerType}
                 label="充電樁類型"
+                disabled={status !== 'DISCONNECTED'}
                 onChange={(e) => {
                   setChargerType(e.target.value as 'AC' | 'DC');
                   if (e.target.value === 'AC') {
@@ -71,54 +75,30 @@ export const ConnectionSettings: React.FC<ConnectionSettingsProps> = ({
                 <MenuItem value="DC">DC 雙槍</MenuItem>
               </Select>
             </FormControl>
-            <FormControl sx={{ minWidth: 100 }}>
-              <InputLabel>協定</InputLabel>
-              <Select
-                value={wsProtocol}
-                label="協定"
-                onChange={(e) => setWsProtocol(e.target.value as 'ws' | 'wss')}
-              >
-                <MenuItem value="ws">ws</MenuItem>
-                <MenuItem value="wss">wss</MenuItem>
-              </Select>
-            </FormControl>
             <TextField
-              label="Domain"
-              value={domain}
-              onChange={(e) => setDomain(e.target.value)}
-              placeholder="your-domain.com"
+              label="OCPP 後台網址"
+              value={serverUrl}
+              onChange={(e) => setServerUrl(e.target.value)}
+              placeholder="wss://主機:443/ocpp/websocket"
+              helperText="填入協定、主機與路徑；CPID 會自動接在最後"
+              disabled={status !== 'DISCONNECTED'}
               sx={{ flexGrow: 1 }}
             />
           </Stack>
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-            <FormControl sx={{ minWidth: 200 }}>
-              <InputLabel>CPID</InputLabel>
-              <Select
+            <TextField
                 value={cpPath}
                 label="CPID"
-                onChange={(e) => {
-                  setCpPath(e.target.value as string);
-                  if (status === 'CONNECTED') {
-                    disconnect();
-                  }
-                }}
-              >
-                <MenuItem value="48210B430236">48210B430236</MenuItem>
-                <MenuItem value="AWSC770001E2P1C2303A002A0">AWSC770001E2P1C2303A002A0</MenuItem>
-                <MenuItem value="TACW1942922P7527">TACW1942922P7527</MenuItem>
-                <MenuItem value="CP001">CP001</MenuItem>
-                <MenuItem value="CP002">CP002</MenuItem>
-                <MenuItem value="CP003">CP003</MenuItem>
-                <MenuItem value="CP004">CP004</MenuItem>
-                <MenuItem value="CP005">CP005</MenuItem>
-              </Select>
-            </FormControl>
+                onChange={(e) => setCpPath(e.target.value)}
+                disabled={status !== 'DISCONNECTED'}
+                sx={{ minWidth: 200 }}
+            />
             <Stack direction="row" spacing={1} sx={{ flexGrow: 1 }}>
               <Button 
                 variant="contained" 
                 color="success" 
                 onClick={connect} 
-                disabled={status !== 'DISCONNECTED'}
+                disabled={status !== 'DISCONNECTED' || !cpPath.trim() || !/^wss?:\/\/[^\s]+$/.test(serverUrl.trim())}
                 sx={{ flexGrow: 1 }}
               >
                 🔗 連線

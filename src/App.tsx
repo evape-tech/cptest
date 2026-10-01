@@ -5,7 +5,11 @@ import {
   CssBaseline,
   ThemeProvider,
   Box,
+  Button,
 } from '@mui/material';
+import { BatchSimulator } from './components/BatchSimulator';
+import { ChargerQrCode } from './components/ChargerQrCode';
+import { useQrCode } from './hooks/useQrCode';
 import { useOcppStateMachine } from './useOcppStateMachine';
 import { OcppService } from './ocppService';
 import { useWebSocket } from './useWebSocket';
@@ -20,12 +24,11 @@ import {
   SystemLogs,
 } from './components';
 
-// 自動根據協定切換 ws/wss
-const defaultWsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-const defaultDomain = window.location.hostname;
-
 // 主應用程式組件
 function App() {
+  const [testMode, setTestMode] = useState<'single' | 'batch'>('single');
+  const [batchActive, setBatchActive] = useState(false);
+  const [authorizeRemoteTxRequests, setAuthorizeRemoteTxRequests] = useState(false);
   // ===== 狀態管理 =====
   // 日誌訊息陣列
   const [logs, setLogs] = useState<string[]>([]);
@@ -71,15 +74,9 @@ function App() {
   const meterTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // ===== WebSocket 連線設定 =====
-  // domain 與協定選擇
-  const [domain, setDomain] = useState(defaultDomain);
-  const [wsProtocol, setWsProtocol] = useState<'ws' | 'wss'>(defaultWsProtocol);
-  // CP 路徑選擇（改為 cpid）
-  const [cpPath, setCpPath] = useState('48210B430236');
-  // 組合完整 ws/wss URL，cpid 前補上 /ocpp
-  const wsUrl = wsProtocol === 'wss'
-    ? `wss://${domain}:443/ocpp/${cpPath}`
-    : `ws://${domain}:8089/ocpp/${cpPath}`
+  const [serverUrl, setServerUrl] = useState('wss://ocpp.evape.com.tw:443/ocpp/websocket');
+  const [cpPath, setCpPath] = useState('Jackson0929001');
+  const wsUrl = `${serverUrl.trim().replace(/\/+$/, '')}/${encodeURIComponent(cpPath.trim())}`;
 
   // ===== 日誌紀錄 =====
   const appendLog = (msg: string) => {
@@ -94,8 +91,10 @@ function App() {
     disconnect,
   } = useWebSocket(wsUrl, (event: MessageEvent) => {
     if (!event || typeof event !== 'object' || !('data' in event)) return;
+    if (handleQrMessage(event.data)) return;
     handleMessage(event);
   });
+  const { qrState, refreshQr, handleQrMessage } = useQrCode(socketRef, status);
   
   const statusRef = useRef(status);
   useEffect(() => { statusRef.current = status; }, [status]);
@@ -231,6 +230,7 @@ function App() {
 
   // ===== OCPP 訊息處理 hook =====
   const { handleMessage, clearTransactionMapping } = useOcppMessageHandler({
+    authorizeRemoteTxRequests,
     socketRef,
     appendLog,
     chargerType,
@@ -462,6 +462,11 @@ function App() {
         py: 3,
       }}>
         <Container maxWidth="lg">
+          <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
+            <Button variant={testMode === 'single' ? 'contained' : 'outlined'} disabled={batchActive} onClick={() => setTestMode('single')}>單台測試</Button>
+            <Button variant={testMode === 'batch' ? 'contained' : 'outlined'} disabled={status !== 'DISCONNECTED'} onClick={() => setTestMode('batch')}>批次 AC 測試（50／100 台）</Button>
+          </Stack>
+          {testMode === 'batch' ? <BatchSimulator onActiveChange={setBatchActive} /> : <>
           <HeaderSection 
             status={status}
             chargerType={chargerType}
@@ -469,12 +474,12 @@ function App() {
 
           <Stack spacing={3}>
             <ConnectionSettings
+              authorizeRemoteTxRequests={authorizeRemoteTxRequests}
+              setAuthorizeRemoteTxRequests={setAuthorizeRemoteTxRequests}
               chargerType={chargerType}
               setChargerType={setChargerType}
-              wsProtocol={wsProtocol}
-              setWsProtocol={setWsProtocol}
-              domain={domain}
-              setDomain={setDomain}
+              serverUrl={serverUrl}
+              setServerUrl={setServerUrl}
               cpPath={cpPath}
               setCpPath={setCpPath}
               wsUrl={wsUrl}
@@ -483,6 +488,8 @@ function App() {
               disconnect={disconnect}
               setConnectorId={setConnectorId}
             />
+
+            <ChargerQrCode state={qrState} connected={status === 'CONNECTED'} onRefresh={refreshQr} />
 
             <ChargerStatus
               chargerType={chargerType}
@@ -532,6 +539,7 @@ function App() {
               clearLogs={clearLogs}
             />
           </Stack>
+          </>}
         </Container>
       </Box>
     </ThemeProvider>
